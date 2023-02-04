@@ -40,7 +40,8 @@ app = APIRouter()
 async def pull_stream_data_ws(
         ws: WebSocket,
         stream_id: str = Path(..., description='The unique ID of the stream'),
-        last_entry_id: str=Query('*', description="Start retrieving entries later than the provided ID"),
+        last_entry_id: str=Query('$', description="Start retrieving entries later than the provided ID"),
+        block: int|None=Query(5000, description="How long to block, in milliseconds"),
         latest: bool=Query(False, description='Should we allow frame skipping? Ok for some data, not for others.'),
         max_fps: float=Query(0, description='Should we allow frame skipping? Ok for some data, not for others.'),
 ):
@@ -55,14 +56,15 @@ async def pull_stream_data_ws(
     agent = Agent(ws)
     try:
         t0 = time.time()
-        cursor = {stream_id: last_entry_id}
+        cursor = agent.init_cursor({stream_id: last_entry_id})
         while True:
-            results, cursor = await agent.read(cursor, latest=latest)
+            results, cursor = await agent.read(cursor, latest=latest, block=block)
             offsets, entries = utils.pack_entries(results)
             await ws.send_json(offsets)
             await ws.send_bytes(entries)
             if max_fps:
                 await asyncio.sleep(max(0, 1 / max_fps - (time.time() - t0)))
+                t0 = time.time()
     except (WebSocketDisconnect, ConnectionClosed):
         pass
 

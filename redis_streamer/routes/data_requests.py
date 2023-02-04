@@ -1,9 +1,9 @@
 import asyncio
 import io
+import orjson
 from fastapi import APIRouter, Query, Path, File, UploadFile
 from fastapi.responses import StreamingResponse
-from .. import utils
-from ..core import Agent
+from redis_streamer import Agent, utils
 
 app = APIRouter()
 
@@ -57,9 +57,9 @@ async def get_data_entries(
 
     """
     agent = Agent()
-    entries, cursor = await agent.read({sid: last_entry_id}, count=count)
+    entries, _ = await agent.read(agent.init_cursor({sid: last_entry_id}), count=count)
     offsets, content = utils.pack_entries(entries)
     return StreamingResponse(
         io.BytesIO(content),
-        headers={'entry-offset': offsets},
+        headers={'entry-offset': orjson.dumps(offsets).decode('utf-8')},
         media_type='application/octet-stream')

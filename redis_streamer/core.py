@@ -1,18 +1,19 @@
+from __future__ import annotations
 import os
 import time
 import asyncio
-import orjson
 from redis import asyncio as aioredis
 
-from . import utils
+from redis_streamer import utils
 
 class Context:
     stream_maxlen = os.getenv('REDIS_STREAM_MAXLEN') or 1000
     async def init(self):
-        self.r = await aioredis.from_url(
-            url=os.getenv('REDIS_URL') or 'redis://127.0.0.1:6789',
-            max_connections=int(os.getenv('REDIS_MAX_CONNECTIONS') or 9000),
-        )
+        url = os.getenv('REDIS_URL') or 'redis://127.0.0.1:6789'
+        max_connections = int(os.getenv('REDIS_MAX_CONNECTIONS') or 9000)
+        print("Connecting to", url, '...')
+        self.r = await aioredis.from_url(url=url, max_connections=max_connections)
+        print("Connected?", await self.r.ping())
 ctx = Context()
 
 META_PREFIX = 'XMETA'
@@ -22,16 +23,13 @@ META_PREFIX = 'XMETA'
 class Agent:
     '''Redis agent'''
     def __init__(self, ws=None) -> None:
-        self.ws = ws
+        self._ws = ws
 
-    # ---------------------------------------------------------------------------- #
-    #                             Client communication                             #
-    # ---------------------------------------------------------------------------- #
-
-    async def write_bytes(self, message):
-        if self.ws is None:
+    @property
+    def ws(self):
+        if self._ws is None:
             raise RuntimeError("No websocket available.")
-        data = await self.ws.recv_bytes()
+        return self._ws
 
     # ---------------------------------------------------------------------------- #
     #                               Running commands                               #
@@ -46,8 +44,6 @@ class Agent:
                 ack = q.pop('ack', False)
                 await self.run_command(p, **query)
                 if ack:
-                    if self.ws is None:
-                        raise RuntimeError("No websocket provided to send ack.")
                     await self.ws.send_text('')
             xs = await p.execute()
         return xs[0] if squeeze else xs
@@ -74,14 +70,12 @@ class Agent:
         return self.xlen(p, sid)
 
     async def cmd__xadd(self, p, sid, **kw):
-        if self.ws is None:
-            raise RuntimeError("No websocket provided to receive data from.")
         data = await self.ws.recv_bytes()
         return self.xadd(p, sid, data, **kw)
 
     # ----- These are synchronous because they can be used with a transaction ---- #
 
-    def xread(self, p, sids, count=1, block=True):
+    def xread(self, p, sids, count=1, block=None):
         return p.xread(sids, count=count, block=block)
 
     def xrevrange(self, p, sid, start, end='+', inclusive=False, count=1):
@@ -92,6 +86,8 @@ class Agent:
         return p.xrevrange(sid, end, start, count=count)
 
     def xrange(self, p, sid, start, end='+', inclusive=False, count=1):
+        if start == '$':
+            start = utils.format_epoch_time(time.time())
         if not inclusive and start != '-':
             start = f'({start}'
         return p.xrange(sid, start, end, count=count)
@@ -121,41 +117,74 @@ class Agent:
     #                              Reading Streamers                               #
     # ---------------------------------------------------------------------------- #
 
-    def update_cursor(self, sids, data):
-        return {s: max((t for t in data), default=t) for s, t in sids.items()}
+    def init_cursor(self, sids) -> dict[str, str]:
+        # allow list - default to after now
+        if isinstance(sids, list):
+            sids = {s: '$' for s in sids}
+        # replace dollar with explicit time
+        for k, l in sids.items():
+            if l == '$':
+                sids[k] = utils.format_epoch_time(time.time())
+        return sids
 
+    # def encode_cursor(self, sids):
+    #     return {utils.maybe_encode(k): utils.maybe_encode(l) for k, l in sids.items()}
 
-    async def read(self, sids, latest=False, **kw):
+    def update_cursor(self, sids, data) -> dict[str, str]:
+        for s, ts in data:
+            if ts:
+                sids[s] = max(t for t, x in ts)
+        return sids
+
+    async def read(self, sids, latest=False, block=None, **kw) -> tuple[list, dict[str, str]]:#tuple[list[str|list[tuple[str|list[bytes]]]], dict[str, str]]
         if latest:
-            with ctx.r.pipeline() as p:
+            async with ctx.r.pipeline() as p:
                 for sid, t in sids.items():
                     self.xrevrange(p, sid, t, **kw)
                 data = list(zip(sids, await p.execute()))
+            if not any(x for s, x in data):
+                data = await self.xread(ctx.r, sids, block=block, **kw)
         else:
-            data = await self.xread(ctx.r, sids, **kw)
+            data = await self.xread(ctx.r, sids, block=block, **kw)
+
+        # decode stream IDs and timestamps
+        data = decode_xread_format(data)
         return data, self.update_cursor(sids, data)
 
-    async def iread(self, sid, start, latest=False):
-        async for v in (
-            self.iread_latest(sid, start) 
-            if latest else 
-            self.iread_all({sid: start})
-        ):
-            yield v
+    # async def iread(self, sid, start, latest=False):
+    #     async for v in (
+    #         self.iread_latest(sid, start) 
+    #         if latest else 
+    #         self.iread_all({sid: start})
+    #     ):
+    #         yield v
 
-    async def iread_all(self, sids):
-        while True:
-            xs = await ctx.r.xread(sids)
-            for sid, xs in xs:
-                for t, x in xs:
-                    yield sid, t, x
-                if xs:
-                    sids[sid] = xs[-1][0]
+    # async def iread_all(self, sids):
+    #     while True:
+    #         xs = await ctx.r.xread(sids)
+    #         for sid, xs in xs:
+    #             for t, x in xs:
+    #                 yield sid, t, x
+    #             if xs:
+    #                 sids[sid] = xs[-1][0]
 
-    async def iread_latest(self, sid, start='$'):
-        while True:
-            xs: list = await self.xrevrange(ctx.r, sid, start)
-            for t, x in xs:
-                yield sid, t, x
-            if xs:
-                start = xs[-1][0]
+    # async def iread_latest(self, sid, start='$'):
+    #     while True:
+    #         xs: list = await self.xrevrange(ctx.r, sid, start)
+    #         for t, x in xs:
+    #             yield sid, t, x
+    #         if xs:
+    #             start = xs[-1][0]
+
+
+def decode_xread_format(data):
+    return [
+        (utils.maybe_decode(s), [(utils.maybe_decode(t), x) for t, x in xs])
+        for s, xs in data
+    ]
+
+
+def init_stream_cursor(sids):
+    t = utils.format_epoch_time(time.time())
+    sids = {k: t if l == '$' else l for k, l in sids.items()}
+    return sids

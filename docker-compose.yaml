@@ -1,32 +1,18 @@
 version: '3'
 
 services:
-
-  # The API
-
-  app:
-    build: ./api
-    container_name: streams
-    expose: 
-      - "8000"
+  redisstreamer:
+    build: .
+    container_name: redisstreamer
     ports:
-     - 7890:8000
-    networks:
-      - web
-      - default
+     - 8000:8000
+    volumes:
+      - ./redis_streamer:/src/redis_streamer
     environment:
       REDIS_URL: redis://redis:6379
     depends_on:
       - redis
-      - mongo
     restart: unless-stopped
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.streams.rule=Host(`stream.${DOMAIN}`)"
-      - "traefik.http.routers.streams.entrypoints=websecure"
-      - "traefik.http.routers.streams.tls.certresolver=le"
-      - "traefik.http.routers.streams.tls=true"
-      - "traefik.http.services.streams.loadbalancer.server.port=8000"
 
   redis:
     image: redis:7
@@ -35,8 +21,7 @@ services:
     ports:
       - 6379:6379
     volumes:
-      - ${VOLUMES}/redis-data:/data
-    #  - ./redis/redis_6789.conf:/usr/local/etc/redis/redis.conf
+      - ./redis/redis_6789.conf:/usr/local/etc/redis/redis.conf
     environment:
       ALLOW_EMPTY_PASSWORD: 'yes'
     healthcheck:
@@ -54,11 +39,3 @@ services:
       - redis
     ports:
       - '8035:8001'
-
-
-networks:
-  #default:
-  #  name: ptg
-  web:
-    external: true
-    name: web

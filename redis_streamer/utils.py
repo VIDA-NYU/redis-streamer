@@ -1,15 +1,20 @@
 from __future__ import annotations
 import datetime
-import orjson
 
+
+
+def maybe_encode(s: str|bytes, encoding='utf-8'):
+    '''If the input is str, encode as utf-8 (or other).'''
+    return s.encode(encoding) if isinstance(s, str) else s
+
+def maybe_decode(s: str|bytes, encoding='utf-8'):
+    '''If the input is bytes, decode as utf-8 (or other).'''
+    return s.decode(encoding) if isinstance(s, bytes) else s
 
 # ---------------------------------------------------------------------------- #
 #                               Timestamp parsing                              #
 # ---------------------------------------------------------------------------- #
 
-def maybe_decode(s: str|bytes, encoding='utf-8'):
-    '''If the input is bytes, decode as utf-8 (or other).'''
-    return s.decode(encoding) if isinstance(s, bytes) else s
 
 def parse_epoch_time(tid: str|bytes):
     '''Convert a redis timestamp to epoch seconds.'''
@@ -27,8 +32,10 @@ def format_datetime(dt: datetime.datetime):
     '''Format a redis timestamp from a datetime object.'''
     return format_epoch_time(dt.timestamp())
 
-def format_iso(tid: str):
+def format_iso(tid: str|bytes, format: str=''):
     '''Convert a redis timestamp to a iso format.'''
+    if not format:
+        return parse_datetime(tid).strftime(format)
     return parse_datetime(tid).isoformat()
 
 
@@ -40,9 +47,9 @@ def pack_entries(entries):
     offsets = []
     content = bytearray()
     for sid, data in entries:
-        sid = sid.decode('utf-8') if isinstance(sid, bytes) else sid
+        sid = maybe_decode(sid)
         for ts, d in data:
-            offsets.append((sid, ts.decode('utf-8'), len(content)))
+            offsets.append((sid, maybe_decode(ts), len(content)))
             content += d[b'd']
-    jsonOffsets = orjson.dumps(offsets).decode('utf-8')
-    return jsonOffsets, content
+    # jsonOffsets = orjson.dumps(offsets).decode('utf-8')
+    return offsets, content

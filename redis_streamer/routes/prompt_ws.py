@@ -72,7 +72,11 @@ async def prompt_pull_data_ws(ws: WebSocket):
         async for query in recv_queries(ws):
             xs = await agent.run_commands([query], 'XREAD')
             for sid, t, data, metadata in xs:
-                await ws.send_json(serialize_metadata(sid, t, metadata))
+                await ws.send_json({
+                    'stream_id': sid,
+                    'time': t,
+                    'metadata': metadata,
+                })
                 await ws.send_bytes(data)
     except (WebSocketDisconnect, ConnectionClosed):
         pass
