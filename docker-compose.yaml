@@ -1,0 +1,64 @@
+version: '3'
+
+services:
+
+  # The API
+
+  app:
+    build: ./api
+    container_name: streams
+    expose: 
+      - "8000"
+    ports:
+     - 7890:8000
+    networks:
+      - web
+      - default
+    environment:
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - redis
+      - mongo
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.streams.rule=Host(`stream.${DOMAIN}`)"
+      - "traefik.http.routers.streams.entrypoints=websecure"
+      - "traefik.http.routers.streams.tls.certresolver=le"
+      - "traefik.http.routers.streams.tls=true"
+      - "traefik.http.services.streams.loadbalancer.server.port=8000"
+
+  redis:
+    image: redis:7
+    container_name: redis
+    restart: unless-stopped
+    ports:
+      - 6379:6379
+    volumes:
+      - ${VOLUMES}/redis-data:/data
+    #  - ./redis/redis_6789.conf:/usr/local/etc/redis/redis.conf
+    environment:
+      ALLOW_EMPTY_PASSWORD: 'yes'
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      interval: 1s
+      timeout: 3s
+      retries: 5
+
+  # a dashboard to view redis
+  redisinsight:
+    image: redislabs/redisinsight:latest
+    container_name: redisinsight
+    restart: unless-stopped
+    depends_on:
+      - redis
+    ports:
+      - '8035:8001'
+
+
+networks:
+  #default:
+  #  name: ptg
+  web:
+    external: true
+    name: web
