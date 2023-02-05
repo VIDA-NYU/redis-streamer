@@ -7,6 +7,9 @@ import functools
 import websockets
 import requests
 from urllib.parse import urlencode
+
+import cv2
+import numpy as np
 from PIL import Image
 
 
@@ -29,37 +32,43 @@ class async2sync:
 
 
 class API:
+    '''Query the Redis Streamer API from both Python and the command line.
+    '''
     def __init__(self, url='http://localhost:8000'):
         self._url = url
-        protocol, base = url.split('://', 1)
+        base = url.split('://', 1)[-1]
         self._wsurl = f'ws://{base}'
         self.sess = requests.Session()
 
-    def url(self, url: str, isws=False, **params):
+    def asurl(self, url: str, isws=False, **params):
+        '''Helper to form a URL.'''
+        # create url query string
         params_str = urlencode({k: v for k, v in params.items() if k and v is not None}) if params else ''
         params_str = f'?{params_str}' if params_str else ''
+
         url = f"{self._wsurl if isws else self._url}/{url.rstrip('/')}{params_str}"
         print(url)
         return url
-    
-    def wsurl(self, url: str, **params):
-        return self.url(url, isws=True, **params)
 
-    def get(self, t):
-        self.sess.get(f'{self.url}')
+    def graphql(self, query, vars=None):
+        return self.sess.post(self.asurl('graphql'), json={ 'query': query, 'variables': vars or {} }).json()
 
-    def ls(self):
-        return self.sess.post(self.url('graphql'), json={
-            'query': '''{
-                streams {
-                    sid,
-                    firstEntry,
-                    lastEntry,
-                    firstEntryTime,
-                    lastEntryTime,
-                }
-            }'''
-        }).content
+    def ls(self, *fields):
+        return self.graphql('''query GetStreams {
+            streams {
+                sid
+                firstEntryId
+                lastEntryId
+                firstEntryTime
+                lastEntryTime
+                ''' + '\n'.join(fields) + '''
+            }
+        }''', {'fields': fields})
+
+
+    # ---------------------------------------------------------------------------- #
+    #                                Basic Streaming                               #
+    # ---------------------------------------------------------------------------- #
 
     @async2sync
     async def push_increment(self, sid, max_value=1000, **kw):
@@ -68,55 +77,61 @@ class API:
                 await ws.send_data(json.dumps(i).encode('utf-8'))
 
     @async2sync
-    async def pull_raw(self, sid, max_value=1000, **kw):
+    async def pull_raw(self, sid, **kw):
         async with self.pull_connect_async(sid, **kw) as ws:
             while True:
                 entries = await ws.recv_data()
                 for sid, t, data in entries:
                     tqdm.tqdm.write(f'{sid}: {t} | {data}')
 
+
+    # ---------------------------------------------------------------------------- #
+    #                                Image Streaming                               #
+    # ---------------------------------------------------------------------------- #
+
     @async2sync
     async def push_image(self, sid, shape=(100, 100, 3), fps=100, **kw):
-        import numpy as np
         t0 = time.time()
-        X = np.random.randint(0, 255, size=shape).astype('uint8')
-        buf = io.BytesIO()
-        Image.fromarray(X).save(buf, format='jpeg')
-        X = buf.getvalue()
+
         async with self.push_connect_async(sid, **kw) as ws:
             while True:
-                await ws.send_data(X)
+                im = np.random.randint(0, 255, size=shape).astype('uint8')
+                im = format_image(im)
+                await ws.send_data(im)
                 if fps:
-                    await asyncio.sleep(1/fps)#-(time.time() - t0)
+                    await asyncio.sleep(max(0, 1/fps-(time.time() - t0)))
                     t0 = time.time()
 
     @async2sync
     async def pull_image(self, sid, **kw):
-        import cv2
-        import numpy as np
         async with self.pull_connect_async(sid, **kw) as ws:
             while True:
                 entries = await ws.recv_data()
                 for sid, t, data in entries:
-                    im = np.array(Image.open(io.BytesIO(data)))
-                    # im = np.load(io.BytesIO(data)).astype('uint8')
+                    
                     cv2.imshow(sid, im)
                     cv2.waitKey(1)
 
-    # @async2sync
-    # async def pull(self, sid, last=None, **kw):
-    #     asyncio.run(self.pull_async(sid, last=last, **kw))
 
-    # async def push_async(self, sid, max_value=1000, fps=10):
-    #     return WebsocketStream(self.wsurl(f'data/{sid}/push'))
-
+    # ---------------------------------------------------------------------------- #
+    #                          Websocket Context Managers                          #
+    # ---------------------------------------------------------------------------- #
     
     def push_connect_async(self, sid, **kw):
-        return WebsocketStream(self.wsurl(f'data/{sid}/push', **kw))
+        return WebsocketStream(self.asurl(f'data/{sid}/push', isws=True, **kw))
 
     def pull_connect_async(self, sid, last=None, **kw):
-        return WebsocketStream(self.wsurl(f'data/{sid}/pull', last=last, **kw))
+        return WebsocketStream(self.asurl(f'data/{sid}/pull', isws=True, last=last, **kw))
 
+
+def format_image(im, format='jpeg'):
+    buf = io.BytesIO()
+    Image.fromarray(im).save(buf, format=format)
+    return buf.getvalue()
+
+def load_image(im):
+    im = np.array(Image.open(io.BytesIO(data)))
+    # im = np.load(io.BytesIO(data)).astype('uint8')
 
 class WebsocketStream:
     _pbar = None

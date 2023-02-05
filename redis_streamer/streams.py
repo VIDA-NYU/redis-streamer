@@ -31,7 +31,7 @@ Utf8 = strawberry.scalar(
 
 @strawberry.type
 class Stream:
-    id: str
+    sid: str
     first_entry_id: Utf8=strawberry.UNSET
     last_entry_id: Utf8=strawberry.UNSET
 
@@ -72,7 +72,7 @@ class Stream:
     def from_info_meta(cls, sid, info, meta=None):
         if isinstance(info, Exception):
             info = {'error': str(info)}
-        d = {'id': sid, **({k.replace('-', '_'): v for k, v in (info or {}).items()})}
+        d = {'sid': sid, **({k.replace('-', '_'): v for k, v in (info or {}).items()})}
         if d.get('first_entry'):
             d['first_entry_id'], d['first_entry_data_bytes'] = d.pop('first_entry')
         if d.get('last_entry'):
@@ -94,7 +94,7 @@ class Streams:
 
     @strawberry.field
     async def streams(self, sids: list[str]|None=None) -> list[Stream]:
-        sids = sids or await Streams.ids(self, search_meta=True)
+        sids = sids or await Streams.sids(self, search_meta=True)
         async with ctx.r.pipeline() as pipe:
             for sid in sids:
                 pipe.get(f'{META_PREFIX}:{sid}').xinfo_stream(sid)
