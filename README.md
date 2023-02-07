@@ -4,14 +4,22 @@ A graphql + websocket client for Redis Streams.
 
 ## Getting started
 
+To bring up redis and the API, do:
 ```bash
 docker-compose up -d --build
 ```
-Access here: http://localhost:8000
+Access the API here: http://localhost:8000
+
+Access the GraphQL playground here: http://localhost:8000/graphql
 
 ### Sending and Receiving Data
 
 To send/receive data, you should do it over websockets. i.e. `ws://localhost:8000`
+
+> NOTE: By default, this websocket library limits incoming messages to 1MB and will throw an error if they are larger. To disable this, you can
+> either set `max_size=None` to disable it entirely, or set it to some sensible number e.g. `max_size=2**26` is `64MB`.
+
+`pip install websockets`
 
 #### Send: `/data/{stream_id}/push`
 
@@ -36,7 +44,6 @@ async def send_data(sid: str):
 If you want to skip sending the header:
 
 ```python
-import json
 import websockets
 
 async def send_data(sid: str):
@@ -56,7 +63,7 @@ import json
 import websockets
 
 async def receive_data(sid: str):
-    async with websockets.connect(f'ws://localhost:8000/data/{sid}/pull') as ws:
+    async with websockets.connect(f'ws://localhost:8000/data/{sid}/pull', max_size=None) as ws:
         while True:
             # read the header
             header = json.loads(await ws.recv())
@@ -73,11 +80,10 @@ async def receive_data(sid: str):
 To skip the header and assume single messages:
 
 ```python
-import json
 import websockets
 
 async def receive_data(sid: str):
-    async with websockets.connect(f'ws://localhost:8000/data/{sid}/pull?header=0') as ws:
+    async with websockets.connect(f'ws://localhost:8000/data/{sid}/pull?header=0', max_size=None) as ws:
         while True:
             # read the data
             data = await ws.recv()
@@ -85,9 +91,26 @@ async def receive_data(sid: str):
             timestamp, data = my_parse_header_and_payload(data)
             do_something_with_data(timestamp, data)
 ```
+
+To allow frame dropping:
+```python
+import websockets
+
+async def receive_data(sid: str):
+    async with websockets.connect(f'ws://localhost:8000/data/{sid}/pull?header=0&latest=1', max_size=None) as ws:
+        while True:
+            # read the data
+            data = await ws.recv()
+            # parse internal timestamp
+            timestamp, data = my_parse_header_and_payload(data)
+            do_something_with_data(timestamp, data)
+```
+
 ### Sending and Receiving Data without Websockets
 
 For cases where you are unable to use websockets, you can also just regular REST requests to send the data.
+
+`pip install requests`
 
 To query data:
 ```python 
@@ -154,9 +177,9 @@ r.raise_for_status()
 You can query the graphql - playground and schema are available (once you start the server) [here](http://localhost:8000/graphql). 
 
 Make requests like this:
-```bash
-POST "http://localhost:8000/graphql"
-     json=({ query: 'query YourQuery { ... $x ... }', variables: { 'x': 5 } })
+```python
+import requests
+requests.post("http://localhost:8000/graphql" json=({ "query": 'query YourQuery { ... $x ... }', "variables": { 'x': 5 } }))
 ```
 
 ### Querying devices
