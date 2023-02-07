@@ -47,7 +47,6 @@ class API:
         params_str = f'?{params_str}' if params_str else ''
 
         url = f"{self._wsurl if isws else self._url}/{url.rstrip('/')}{params_str}"
-        print(url)
         return url
 
     def graphql(self, query, vars=None):
@@ -106,12 +105,64 @@ class API:
     async def pull_image(self, sid, **kw):
         async with self.pull_connect_async(sid, **kw) as ws:
             while True:
-                entries = await ws.recv_data()
+                header, entries = await ws.recv_data()
+                entries = unpack_entries(header, entries)
                 for sid, t, data in entries:
-                    
+                    im = load_image(data)
                     cv2.imshow(sid, im)
                     cv2.waitKey(1)
 
+    def push_image_rest(self, sid, shape=(100, 100, 3), fps=100, **kw):
+        url = self.asurl(f'data/{sid}', **kw)
+        print('POST', url)
+
+        pbar = tqdm.tqdm()
+
+        t0 = time.time()
+        while True:
+            im = np.random.randint(0, 255, size=shape).astype('uint8')
+            im = format_image(im)
+            r = requests.post(url, files=[('entries', (sid, im))])
+            if r.status_code >= 500: # show internal server errors
+                raise requests.HTTPError(r.text)
+            r.raise_for_status()
+
+            time.sleep(0)
+            if fps:
+                time.sleep(max(0, 1/fps-(time.time() - t0)))
+                t0 = time.time()
+
+            pbar.update()
+
+    def pull_image_rest(self, sid, fps=None, last_entry_id='$', block=5000, **kw):
+        url = self.asurl(f'data/{sid}', last_entry_id=last_entry_id, block=block, **kw)
+        print(url)
+        t0 = time.time()
+
+        pbar = tqdm.tqdm()
+        
+        while True:
+            r = requests.get(self.asurl(f'data/{sid}', last_entry_id=last_entry_id, block=block, **kw))
+            if r.status_code >= 500: # show internal server errors
+                raise requests.HTTPError(r.text)
+            r.raise_for_status()
+            last_entry_id = r.headers['x-last-entry-id']
+            header = json.loads(r.headers['x-offsets'])
+            entries = r.content
+            entries = unpack_entries(header, entries)
+            for sid, t, data in entries:
+                im = load_image(data)
+                cv2.imshow(sid, im)
+                cv2.waitKey(1)
+            if not entries:
+                print("No data available...")
+            
+            time.sleep(0)
+            if fps:
+                time.sleep(max(0, 1/fps-(time.time() - t0)))
+                t0 = time.time()
+
+            pbar.update()
 
     # ---------------------------------------------------------------------------- #
     #                          Websocket Context Managers                          #
@@ -129,9 +180,18 @@ def format_image(im, format='jpeg'):
     Image.fromarray(im).save(buf, format=format)
     return buf.getvalue()
 
-def load_image(im):
+def load_image(data):
     im = np.array(Image.open(io.BytesIO(data)))
     # im = np.load(io.BytesIO(data)).astype('uint8')
+    return im
+
+
+def unpack_entries(header: list[tuple[str, str, int]], entries: bytes) -> list[tuple[str, str, bytes]]:
+    sids, ts, offsets = tuple(zip(*header)) or ((),)*3
+    return [
+        (sid, t, entries[start:end])
+        for sid, t, start, end in zip(sids, ts, offsets, offsets[1:] + (None,))
+    ]
 
 class WebsocketStream:
     _pbar = None
@@ -143,6 +203,7 @@ class WebsocketStream:
         kw.setdefault('max_size', 2**24)
 
     async def __aenter__(self):
+        print("Connecting to:", self.url)
         self.connector = websockets.connect(self.url)
         self.ws = await self.connector.__aenter__()  # type: ignore
         return self
@@ -155,26 +216,19 @@ class WebsocketStream:
         return 
 
     async def recv_data(self):
-        if self.show_pbar:
-            if self._pbar is None:
-                self._pbar = tqdm.tqdm()
-            self._pbar.update()
-
-        offsets = json.loads(await self.ws.recv())
+        header = json.loads(await self.ws.recv())
         entries = await self.ws.recv()
         await asyncio.sleep(0)
-
-        sids, ts, offsets = tuple(zip(*offsets)) or ((),)*3
-        return [
-            (sid, t, entries[start:end])
-            for sid, t, start, end in zip(sids, ts, offsets, offsets[1:] + (None,))
-        ]
+        self.update_progress()
+        return header, entries
 
     async def send_data(self, data):
         await self.ws.send(json.dumps([len(data)]))
         await self.ws.send(data)
         await asyncio.sleep(0)
+        self.update_progress()
 
+    def update_progress(self):
         if self.show_pbar:
             if self._pbar is None:
                 self._pbar = tqdm.tqdm()

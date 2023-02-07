@@ -49,17 +49,75 @@ async def receive_data(sid: str):
         for sid, t, start, end in zip(sids, ts, offsets, offsets[1:] + (None,)):
             do_something_with_data(sid, t, entries[start:end])
 ```
+### Sending and Receiving Data without Websockets
 
+For cases where you are unable to use websockets, you can also just regular REST requests to send the data.
 
-### Querying Stream Metadata
+```python 
 
-The stream metadata is available using a graphql endpoint - playground [here](http://localhost:8000/graphql). 
+```
+
+### Using Graphql
+
+You can query the graphql - playground and schema are available (once you start the server) [here](http://localhost:8000/graphql). 
 
 Make requests like this:
 ```bash
 POST "http://localhost:8000/graphql"
-     json=({ query: 'query YourQuery { ... }' })
+     json=({ query: 'query YourQuery { ... $x ... }', variables: { 'x': 5 } })
 ```
+
+### Querying devices
+This API is designed to handle streams from multiple different sensors. This works by adding a prefix string to streams.
+If no device is declared, it writes under the device `default`.
+
+#### Listing devices
+
+```t
+query GetDevices {
+  devices {
+    connected  # get devices that are currently "connected"
+    seen  # get devices that have been seen, but aren't necessarily connected
+  }
+}
+```
+
+The only difference between `connected` and `seen` is that devices may be removed from `connected` if they are deemed disconnected, but will remain in `seen`.
+
+Device disconnected is currently not handled automatically, so it is a bookkeeping stage to be handled by the client for now.
+
+#### Listing device streams
+variables: `{id: "my-device"}`
+```t
+query GetDevices {
+  devices {
+    streamIds(device_id: $id)  # just return the names of the streams
+    streams(device_id: $id) {  # return the full metadata for all streams
+      streamId
+      firstEntryId
+      lastEntryId
+      length
+    }
+  }
+}
+```
+
+#### Connecting/Disconnecting a device
+variables: `{id: "my-device", meta: {parameterA: 11.2, parameterB: "xyz"}}`
+```t
+mutation {
+  connectDevice(id: $id, meta: $meta)
+}
+```
+variables: `{id: "my-device"}`
+```t
+mutation {
+  disconnectDevice(id: $id)
+}
+```
+
+### Querying Stream Metadata
+
 
 You can query this stream info:
 
@@ -105,18 +163,16 @@ The same applies for `last-entry`.
 #### Setting metadata
 You can attach arbitrary JSON to a stream to store whatever info you need.
 
+variables: `{sid: "glf", meta: {format: "mp4"}}`
 ```t
 mutation {
-  streamMeta(
-    sid: "glf",
-    meta: {format: "mp4"},
-  )
+  streamMeta(sid: $id, meta: $meta)
 }
 ```
-
+variables: `{sids: ["glf"]}`
 ```t
 {
-  streams(sids: ["glf"]) {
+  streams(sids: $sids) {
     sid
     meta
   }
@@ -128,9 +184,10 @@ For small and/or text-based data streams, you can use graphql subscriptions to r
 
 This is here for convenience and probably shouldn't be used for high-volume data since it does base64 encoding. Instead use the websocket methods above.
 
+variables: `{sids: ["glf"]}`
 ```t
 subscription DataSubscription {
-  data(sids: ["glf"]) {
+  data(sids: $sids) {
     sid
     time
     data  # base64 encoded data

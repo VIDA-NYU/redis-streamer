@@ -4,6 +4,7 @@ import orjson
 from fastapi import APIRouter, Query, Path, File, UploadFile
 from fastapi.responses import StreamingResponse
 from redis_streamer import Agent, utils
+from redis_streamer.config import DEFAULT_DEVICE, ENABLE_MULTI_DEVICE_PREFIXING
 
 app = APIRouter()
 
@@ -11,6 +12,8 @@ app = APIRouter()
 async def send_data_entries(
         sid: str = Path(..., alias='stream_id', description='The unique ID of the stream'),
         entries: list[UploadFile] = File(..., description='A list of data entries (as multiform files) to be added into the stream(s).'),
+        device_id: str=Query(DEFAULT_DEVICE, description='You should give devices names if you want to manage multiple devices.'),
+        prefix: str=Query('', description='Add a prefix to the streams. If a device ID is provided, this will come after the device ID.'),
 ):
     """Send data into one or multiple streams using multipart/form-data,
     each part represent a separate entry of a stream. Set
@@ -20,6 +23,9 @@ async def send_data_entries(
 
     """
     sids = [x.filename.split('/') for x in entries] if sid == '*' else [sid] * len(entries)
+    if ENABLE_MULTI_DEVICE_PREFIXING:
+        prefix = f'{device_id or DEFAULT_DEVICE}:{prefix}'
+    sids = [f'{prefix}{s}' for s in sids]
     data = await asyncio.gather(*(x.read() for x in entries))
     return await Agent().add_entries(zip(sids, [None]*len(sids), data))
 
@@ -27,8 +33,12 @@ async def send_data_entries(
 @app.get('/{stream_id}', summary='Retrieve data from one or multiple streams', response_class=StreamingResponse)
 async def get_data_entries(
         sid: str = Path(..., alias='stream_id', description='The unique ID of the stream'),
-        last_entry_id: str=Query('*', description="Start retrieving entries later than the provided ID"),
-        count:  int=Query(1, description="the maximum number of entries for each receive"),
+        last_entry_id: str=Query('-', description="Start retrieving entries later than the provided ID"),
+        latest: bool=Query(False, description="Should we return the latest available frame?"),
+        count: int=Query(1, description="the maximum number of entries for each receive"),
+        block: int=Query(None, description="Should it block if no data is available?"),
+        device_id: str=Query(DEFAULT_DEVICE, description='You should give devices names if you want to manage multiple devices.'),
+        prefix: str=Query('', description='Add a prefix to the streams. If a device ID is provided, this will come after the device ID.'),
     ):
     """This retrieves **count** elements that have later timestamps
     than **last_entry_id** from the specified data stream. The entry
@@ -57,9 +67,21 @@ async def get_data_entries(
 
     """
     agent = Agent()
-    entries, _ = await agent.read(agent.init_cursor({sid: last_entry_id}), count=count)
+    
+    if ENABLE_MULTI_DEVICE_PREFIXING:
+        prefix = f'{device_id or DEFAULT_DEVICE}:{prefix}'
+    
+    cursor = agent.init_cursor({f'{prefix}{sid}': last_entry_id})
+    entries, cursor = await agent.read(cursor, latest=latest, count=count, block=block)
+    
+    if ENABLE_MULTI_DEVICE_PREFIXING:
+        entries = [(s[len(prefix):] if s.startswith(prefix) else s, xs) for s, xs in entries]
+    
     offsets, content = utils.pack_entries(entries)
     return StreamingResponse(
         io.BytesIO(content),
-        headers={'entry-offset': orjson.dumps(offsets).decode('utf-8')},
+        headers={
+            'x-offsets': orjson.dumps(offsets).decode('utf-8'), 
+            'x-last-entry-id': cursor[f'{prefix}{sid}']
+        },
         media_type='application/octet-stream')

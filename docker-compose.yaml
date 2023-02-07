@@ -10,6 +10,7 @@ services:
       - ./redis_streamer:/src/redis_streamer
     environment:
       REDIS_URL: redis://redis:6379
+      # DISABLE_MULTI_DEVICE_PREFIXING: "1"
     depends_on:
       - redis
     restart: unless-stopped

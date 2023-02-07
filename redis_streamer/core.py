@@ -21,7 +21,7 @@ META_PREFIX = 'XMETA'
 
 
 class Agent:
-    '''Redis agent'''
+    '''Redis streaming agent'''
     def __init__(self, ws=None) -> None:
         self._ws = ws
 
@@ -117,10 +117,12 @@ class Agent:
     #                              Reading Streamers                               #
     # ---------------------------------------------------------------------------- #
 
-    def init_cursor(self, sids) -> dict[str, str]:
+    def init_cursor(self, sids: list[str]|dict[str, str], prefix='') -> dict[str, str]:
         # allow list - default to after now
         if isinstance(sids, list):
             sids = {s: '$' for s in sids}
+        if prefix:
+            sids = {f'{prefix}{s}': t for s, t in sids.items()}
         # replace dollar with explicit time
         for k, l in sids.items():
             if l == '$':
@@ -130,7 +132,7 @@ class Agent:
     # def encode_cursor(self, sids):
     #     return {utils.maybe_encode(k): utils.maybe_encode(l) for k, l in sids.items()}
 
-    def update_cursor(self, sids, data) -> dict[str, str]:
+    def update_cursor(self, sids: dict[str, str], data: list[str|tuple]) -> dict[str, str]:
         for s, ts in data:
             if ts:
                 sids[s] = max(t for t, x in ts)
@@ -150,31 +152,6 @@ class Agent:
         # decode stream IDs and timestamps
         data = decode_xread_format(data)
         return data, self.update_cursor(sids, data)
-
-    # async def iread(self, sid, start, latest=False):
-    #     async for v in (
-    #         self.iread_latest(sid, start) 
-    #         if latest else 
-    #         self.iread_all({sid: start})
-    #     ):
-    #         yield v
-
-    # async def iread_all(self, sids):
-    #     while True:
-    #         xs = await ctx.r.xread(sids)
-    #         for sid, xs in xs:
-    #             for t, x in xs:
-    #                 yield sid, t, x
-    #             if xs:
-    #                 sids[sid] = xs[-1][0]
-
-    # async def iread_latest(self, sid, start='$'):
-    #     while True:
-    #         xs: list = await self.xrevrange(ctx.r, sid, start)
-    #         for t, x in xs:
-    #             yield sid, t, x
-    #         if xs:
-    #             start = xs[-1][0]
 
 
 def decode_xread_format(data):
