@@ -77,7 +77,7 @@ import json
 import websockets
 
 async def receive_data(sid: str):
-    async with websockets.connect(f'ws://localhost:8000/data/{sid}/pull') as ws:
+    async with websockets.connect(f'ws://localhost:8000/data/{sid}/pull?header=0') as ws:
         while True:
             # read the data
             data = await ws.recv()
