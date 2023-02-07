@@ -16,10 +16,13 @@ Access the GraphQL playground here: http://localhost:8000/graphql
 
 To send/receive data, you should do it over websockets. i.e. `ws://localhost:8000`
 
+`pip install websockets`
+
 > NOTE: By default, this websocket library limits incoming messages to 1MB and will throw an error if they are larger. To disable this, you can
 > either set `max_size=None` to disable it entirely, or set it to some sensible number e.g. `max_size=2**26` is `64MB`.
 
-`pip install websockets`
+
+> NOTE: be warned, the header format is not currently stable, I'm trying to see if there's a cleaner format serve it in (open to suggestions). If you don't need redis timestamps or batched messages, I recommend using the second option with `header=0` :)
 
 #### Send: `/data/{stream_id}/push`
 
