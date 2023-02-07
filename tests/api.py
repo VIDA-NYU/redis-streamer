@@ -135,6 +135,8 @@ class API:
             pbar.update()
 
     def pull_image_rest(self, sid, fps=None, last_entry_id='$', block=5000, **kw):
+        if last_entry_id is True:
+            last_entry_id = '-'  # python fire bug
         url = self.asurl(f'data/{sid}', last_entry_id=last_entry_id, block=block, **kw)
         print(url)
         t0 = time.time()
@@ -190,7 +192,7 @@ def unpack_entries(header: list[tuple[str, str, int]], entries: bytes) -> list[t
     sids, ts, offsets = tuple(zip(*header)) or ((),)*3
     return [
         (sid, t, entries[start:end])
-        for sid, t, start, end in zip(sids, ts, offsets, offsets[1:] + (None,))
+        for sid, t, start, end in zip(sids, ts, (0,) + offsets, offsets)
     ]
 
 class WebsocketStream:

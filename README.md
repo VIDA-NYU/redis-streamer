@@ -21,14 +21,33 @@ import websockets
 
 async def send_data(sid: str):
     async with websockets.connect(f'ws://localhost:8000/data/{sid}/push') as ws:
-        # do what you do
-        data = generate_some_data()
-        # get it ready to store
-        data = serialize_bytes(data)
-        # send the header
-        await ws.send(json.dumps([ len(data) ]))
-        # send the data
-        await ws.send(data)
+        while True:
+            # do what you do
+            data = generate_some_data()
+            # get it ready to store
+            data = serialize_bytes(data)
+            # send the header - used for batched uploads (or to manually set the timestamp)
+            await ws.send(json.dumps([ len(data) ]))
+            # send the data
+            await ws.send(data)
+```
+
+
+If you want to skip sending the header:
+
+```python
+import json
+import websockets
+
+async def send_data(sid: str):
+    async with websockets.connect(f'ws://localhost:8000/data/{sid}/push?header=0') as ws:
+        while True:
+            # do what you do
+            data = generate_some_data()
+            # get it ready to store
+            data = serialize_bytes(data)
+            # send the data
+            await ws.send(data)
 ```
 
 #### Receive: `/data/{stream_id}/pull`
@@ -38,23 +57,96 @@ import websockets
 
 async def receive_data(sid: str):
     async with websockets.connect(f'ws://localhost:8000/data/{sid}/pull') as ws:
-        # read the header
-        header = json.loads(await ws.recv())
-        # read the data
-        entries = await ws.recv()
+        while True:
+            # read the header
+            header = json.loads(await ws.recv())
+            # read the data
+            entries = await ws.recv()
 
-        # unpack the header
-        sids, ts, offsets = tuple(zip(*header)) or ((),)*3
-        # split up the data (for cases where you query multiple streams)
-        for sid, t, start, end in zip(sids, ts, offsets, offsets[1:] + (None,)):
-            do_something_with_data(sid, t, entries[start:end])
+            # unpack the header
+            sids, ts, offsets = tuple(zip(*header)) or ((),)*3
+            # split up the data (for cases where you query multiple streams)
+            for sid, t, start, end in zip(sids, ts, offsets, offsets[1:] + (None,)):
+                do_something_with_data(sid, t, entries[start:end])
+```
+
+To skip the header and assume single messages:
+
+```python
+import json
+import websockets
+
+async def receive_data(sid: str):
+    async with websockets.connect(f'ws://localhost:8000/data/{sid}/pull') as ws:
+        while True:
+            # read the data
+            data = await ws.recv()
+            # parse internal timestamp
+            timestamp, data = my_parse_header_and_payload(data)
+            do_something_with_data(timestamp, data)
 ```
 ### Sending and Receiving Data without Websockets
 
 For cases where you are unable to use websockets, you can also just regular REST requests to send the data.
 
+To query data:
 ```python 
+import requests
 
+sid = "my-stream"
+
+# get messages from the current timestamp - blocks for 500 ms by default
+r = requests.get(f'ws://localhost:8000/data/{sid}')
+r.raise_for_status()
+data = r.content
+
+# get the last entry id to query with next time
+last_entry_id = r.headers['x-last-entry-id']
+
+# get the next data point after the one you just received
+r = requests.get(f'ws://localhost:8000/data/{sid}', params={'last_entry_id': last_entry_id})
+r.raise_for_status()
+data = r.content
+
+
+# get the last data point in the queue (no matter how old it is)
+r = requests.get(f'ws://localhost:8000/data/{sid}', params={'last_entry_id': '0', 'latest': True})
+r.raise_for_status()
+data = r.content
+
+# start reading from the beginning of the queue
+r = requests.get(f'ws://localhost:8000/data/{sid}', params={'last_entry_id': '0'})
+r.raise_for_status()
+data = r.content
+
+# get a message from 5 minutes ago (the next message after the provided timestamp)
+t = time.time() - 5*60
+r = requests.get(f'ws://localhost:8000/data/{sid}', params={'last_entry_id': f'{int(t * 1000)}-0'})
+r.raise_for_status()
+data = r.content
+
+# get the latest message, ignoring anything older than 5 minutes ago
+t = time.time() - 5*60
+r = requests.get(f'ws://localhost:8000/data/{sid}', params={'last_entry_id': f'{int(t * 1000)}-0', 'latest': True})
+r.raise_for_status()
+data = r.content
+
+# block the request for up to five seconds and return the first message that comes in.
+t = time.time() - 5*60
+r = requests.get(f'ws://localhost:8000/data/{sid}', params={'last_entry_id': '$', 'block': 5000})
+r.raise_for_status()
+data = r.content
+if not data:
+    print("No new data")
+```
+
+To send data:
+```python 
+import requests
+
+sid = "my-stream"
+r = requests.post(f'ws://localhost:8000/data/{sid}', files=[('entries', (sid, data))])
+r.raise_for_status()
 ```
 
 ### Using Graphql
@@ -75,9 +167,12 @@ If no device is declared, it writes under the device `default`.
 
 ```t
 query GetDevices {
-  devices {
-    connected  # get devices that are currently "connected"
-    seen  # get devices that have been seen, but aren't necessarily connected
+  connected: devices {
+    id  # the name of the device
+  }
+
+  seen: devices(include_all: true) {
+    id
   }
 }
 ```
@@ -102,6 +197,8 @@ query GetDevices {
 }
 ```
 
+Under the hood, streams are stored with their device prefix, but that prefix is removed when viewing them here.
+
 #### Connecting/Disconnecting a device
 variables: `{id: "my-device", meta: {parameterA: 11.2, parameterB: "xyz"}}`
 ```t
@@ -124,30 +221,35 @@ You can query this stream info:
 `sid` represents the stream ID (the redis key).
 ```t
 query GetStreams {
-  sids  # get just the names without querying everything else
-  streams {
-    # redis XINFO STREAM information
-    sid
-    entriesAdded
-    firstEntryId
-    firstEntryData
-    firstEntryTime
-    lastEntryId
-    lastEntryData
-    lastEntryTime
-    lastGeneratedId
-    maxDeletedEntryId
-    groups
-    length
-    radixTreeKeys
-    radixTreeNodes
-    recordedFirstEntryId
-    # error message for XINFO STREAMS
-    error
+  devices {
+    sids  # get just the names without querying everything else
+    streams {
+      # redis XINFO STREAM information
+      id
+      entriesAdded
+      firstEntryId
+      firstEntryData
+      firstEntryString
+      firstEntryJson
+      firstEntryTime
+      lastEntryId
+      lastEntryData
+      lastEntryTime
+      lastGeneratedId
+      maxDeletedEntryId
+      groups
+      length
+      radixTreeKeys
+      radixTreeNodes
+      recordedFirstEntryId
+      # error message for XINFO STREAMS
+      error
 
-    # user-defined stream metadata
-    meta
+      # user-defined stream metadata
+      meta
+    }
   }
+
 }
 ```
 
@@ -157,8 +259,20 @@ The only difference is that we broke out `first-entry` and `last-entry` into par
  - `first-entry-id`: The redis timestamp, e.g. `"1638125133432-0"`
  - `first-entry-time`: The redis timestamp in iso datetime format, e.g. ``
  - `first-entry-data`: The first value in the stream as a base64 encoded string
+ - `first-entry-string`: The first value in the stream as a utf-8 encoded string
+ - `first-entry-json`: The first value in the stream parsed as json
 
 The same applies for `last-entry`.
+
+If you want to ignore the concept of devices, you can also just query all streams:
+```t
+query Streams {
+  streams {
+    id
+  }
+}
+```
+These streams will retain any device prefixes and also lists out system event streams.
 
 #### Setting metadata
 You can attach arbitrary JSON to a stream to store whatever info you need.
@@ -166,7 +280,7 @@ You can attach arbitrary JSON to a stream to store whatever info you need.
 variables: `{sid: "glf", meta: {format: "mp4"}}`
 ```t
 mutation {
-  streamMeta(sid: $id, meta: $meta)
+  updateStreamMeta(sid: $id, meta: $meta)
 }
 ```
 variables: `{sids: ["glf"]}`
@@ -187,11 +301,12 @@ This is here for convenience and probably shouldn't be used for high-volume data
 variables: `{sids: ["glf"]}`
 ```t
 subscription DataSubscription {
-  data(sids: $sids) {
-    sid
+  data(streamIds: $sids) {
+    streamId
     time
     data  # base64 encoded data
-    utf8  # read data as utf-8 text
+    string  # read data as utf-8 text
+    json
   }
 }
 ```

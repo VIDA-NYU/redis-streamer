@@ -32,11 +32,11 @@ async def send_data_entries(
 
 @app.get('/{stream_id}', summary='Retrieve data from one or multiple streams', response_class=StreamingResponse)
 async def get_data_entries(
-        sid: str = Path(..., alias='stream_id', description='The unique ID of the stream'),
+        stream_id: str = Path(..., description='The unique ID of the stream'),
         last_entry_id: str=Query('-', description="Start retrieving entries later than the provided ID"),
         latest: bool=Query(False, description="Should we return the latest available frame?"),
         count: int=Query(1, description="the maximum number of entries for each receive"),
-        block: int=Query(None, description="Should it block if no data is available?"),
+        block: int=Query(500, description="Should it block if no data is available?"),
         device_id: str=Query(DEFAULT_DEVICE, description='You should give devices names if you want to manage multiple devices.'),
         prefix: str=Query('', description='Add a prefix to the streams. If a device ID is provided, this will come after the device ID.'),
     ):
@@ -71,7 +71,7 @@ async def get_data_entries(
     if ENABLE_MULTI_DEVICE_PREFIXING:
         prefix = f'{device_id or DEFAULT_DEVICE}:{prefix}'
     
-    cursor = agent.init_cursor({f'{prefix}{sid}': last_entry_id})
+    cursor = agent.init_cursor({f'{prefix}{stream_id}': last_entry_id})
     entries, cursor = await agent.read(cursor, latest=latest, count=count, block=block)
     
     if ENABLE_MULTI_DEVICE_PREFIXING:
@@ -82,6 +82,6 @@ async def get_data_entries(
         io.BytesIO(content),
         headers={
             'x-offsets': orjson.dumps(offsets).decode('utf-8'), 
-            'x-last-entry-id': cursor[f'{prefix}{sid}']
+            'x-last-entry-id': cursor[f'{prefix}{stream_id}'],
         },
         media_type='application/octet-stream')

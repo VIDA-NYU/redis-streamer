@@ -20,6 +20,7 @@ XADD: {
 }
 
 '''
+from __future__ import annotations
 import time
 import asyncio
 import orjson
@@ -49,13 +50,19 @@ async def pull_stream_data_ws(
         keep_device_id_in_stream_id: bool|None=Query(None, description='This will remove the device ID from stream IDs. Set this to False to disable.'),
         ack: bool=Query(False, description="Should the server wait for you to send back a (text) message before sending the next payload? Can be useful to avoid messages piling up in the queue."),
         prefix: str=Query('', description='Add a prefix to the streams. If a device ID is provided, this will come after the device ID.'),
+        count: int=Query(1, description='Accept multiple messages.'),
+        header: bool=Query(True, description='Should the server send a JSON header before each payload? It contains a list of stream_id, timestamp, byte offset tuples.'),
 ):
     '''Pull data.
     
     Protocol:
-     - receive offset json. [(stream_id, timestamp, end_index), ... for each data payload]
-     - receive data bytes. Can contain multiple messages, refer to offset 
-        i.e. (data[previous_end_index:end_index])
+
+    if header:
+        - client receives offset json. [(stream_id, timestamp, end_index), ... for each data payload]
+        - client receives data bytes. Can contain multiple messages, refer to offset 
+            i.e. (data[previous_end_index:end_index])
+    else:
+        - client receives data bytes. This will contain a single message.
     '''
     await ws.accept()
     agent = Agent(ws)
@@ -67,23 +74,31 @@ async def pull_stream_data_ws(
         if keep_device_id_in_stream_id is None:
             keep_device_id_in_stream_id = '*' in device_id
 
+    stream_ids = stream_id.split('+')
+    assert header or not (count > 1 and len(stream_ids) > 1), "You must enable the header to stream multiple stream IDs or messages."
+
     try:
         t0 = time.time()
-        cursor = agent.init_cursor({f'{prefix}{stream_id}': last_entry_id})
+        cursor = agent.init_cursor({f'{prefix}{s}': last_entry_id for s in stream_ids})
         while True:
-            results, cursor = await agent.read(cursor, latest=latest, block=block)
+            # read data from redis
+            results, cursor = await agent.read(cursor, latest=latest, count=count or 1, block=block)
             # strip device ID from stream IDs
             if not keep_device_id_in_stream_id:
                 results = [(s[len(prefix):] if s.startswith(prefix) else s, xs) for s, xs in results]
 
             # prepare and send back data
             offsets, entries = utils.pack_entries(results)
-            await ws.send_json(offsets)
+            if header:
+                await ws.send_json(offsets)
             await ws.send_bytes(entries)
+
             # rate limiting
             if max_fps:
                 await asyncio.sleep(max(0, 1 / max_fps - (time.time() - t0)))
                 t0 = time.time()
+            
+            # wait for the client to acknowledge the request
             if ack:
                 await ws.receive_text()
     except (WebSocketDisconnect, ConnectionClosed):
@@ -98,21 +113,47 @@ async def push_stream_data_ws(
                                            'If you enable this, you must read the response otherwise everything will hang.'),
         device_id: str=Query(DEFAULT_DEVICE, description='You should give devices names if you want to manage multiple devices.'),
         prefix: str=Query('', description='Add a prefix to the streams. If a device ID is provided, this will come after the device ID.'),
+        header: bool=Query(True, description='Should the server expect a JSON header before each payload? It should contain a list of stream_id, timestamp, byte offset tuples.'),
 ):
-    '''Push data.'''
+    '''Push data.
+    
+    Protocol:
+    
+    if header:
+        - client sends offset json. [(stream_id, timestamp, end_index), ... for each data payload]
+        - client sends data bytes. Can contain multiple messages, refer to offset 
+            i.e. (data[previous_end_index:end_index])
+    else:
+        - client sends data bytes. This expects a single message.
+        
+    
+    '''
     await ws.accept()
     agent = Agent(ws)
-    stream_ids = stream_id.split('+')
     if ENABLE_MULTI_DEVICE_PREFIXING:
         prefix = f'{device_id or DEFAULT_DEVICE}:{prefix}'
+    
+    # multiple streams
+    stream_ids = stream_id.split('+')
+    assert header or len(stream_ids) == 1, "To send multiple stream IDs, you must enable the header."
 
     try:
         while True:
-            sids, ts, offsets = parse_offsets(await ws.receive_json(), stream_ids)
-            sids = [f'{prefix}{s}' for s in sids]
+            # read header
+            if header:
+                sids, ts, offsets = parse_offsets(await ws.receive_json(), stream_ids)
+            else:
+                sids, ts, offsets = stream_ids, [None], None
+
+            # read data
             data = await ws.receive_bytes()
-            entries = get_data_from_offsets(data, offsets)
+            
+            # prepare and send data
+            sids = [f'{prefix}{s}' for s in sids]
+            entries = get_data_from_offsets(data, offsets) if header else [data]
             result = await agent.add_entries(zip(sids, ts, entries))
+
+            # acknowledge receipt
             if ack:
                 await ws.send_json(result)
     except (WebSocketDisconnect, ConnectionClosed):
@@ -132,6 +173,10 @@ def parse_offsets(offsets: list, sids: list[str]):
     return sids, ts, offsets
 
 def get_data_from_offsets(data, offsets):
-    if not offsets or offsets[0] != 0:
+    if not offsets:  # no offsets provided
+        offsets = [0, None]
+    elif offsets[0] != 0:  # expected, pad with zero
         offsets = (0,)+tuple(offsets)
+    else:  # they passed starts instead of end index
+        offsets = tuple(offsets) + (None,)
     return [data[i:j] for i, j in zip(offsets, offsets[1:])]

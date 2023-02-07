@@ -49,7 +49,7 @@ def pack_entries(entries):
     for sid, data in entries:
         sid = maybe_decode(sid)
         for ts, d in data:
-            offsets.append((sid, maybe_decode(ts), len(content)))
             content += d[b'd']
+            offsets.append((sid, maybe_decode(ts), len(content)))
     # jsonOffsets = orjson.dumps(offsets).decode('utf-8')
     return offsets, content
