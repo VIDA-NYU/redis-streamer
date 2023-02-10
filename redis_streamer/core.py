@@ -7,7 +7,7 @@ from redis import asyncio as aioredis
 from redis_streamer import utils
 
 class Context:
-    stream_maxlen = os.getenv('REDIS_STREAM_MAXLEN') or 1000
+    stream_maxlen = int(os.getenv('REDIS_STREAM_MAXLEN') or 1000)
     async def init(self):
         url = os.getenv('REDIS_URL') or 'redis://127.0.0.1:6789'
         max_connections = int(os.getenv('REDIS_MAX_CONNECTIONS') or 9000)
