@@ -1,0 +1,7 @@
+tqdm
+requests
+websockets
+opencv-python
+numpy
+Pillow
+fire
