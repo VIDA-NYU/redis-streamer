@@ -1,46 +1,94 @@
 import os
 import tqdm
 import asyncio
-import ray
+# import ray
+from multiprocessing import Event
+from concurrent.futures import ProcessPoolExecutor
 import datetime
 from .core import ctx, Agent
-from .models import session, RecordingModel
+from .models import session, RecordingModel, create_recording, end_recording
 from .graphql_schema.streams import get_stream_ids
 
-ray.init()
+# ray.init()
+
+PREFIX = ':recording:current'
+RECORDING_NAME = f'{PREFIX}:name'
+
+class RecordingWriter:
+    def __init__(self) -> None:
+        self.pool = ProcessPoolExecutor()
+
+    async def current_recording(self):
+        return (await ctx.r.get(RECORDING_NAME) or b'').decode('utf-8') or None
+
+    async def start(self, name):
+        current_name = await self.current_recording()
+        if current_name:
+            raise RuntimeError(f"already recording {current_name}")
+        await ctx.r.set(RECORDING_NAME, name)
+        self.pool.submit(self._record, name, RECORDING_NAME)
+        print("submitteds")
+
+    async def stop(self):
+        current_name = await self.current_recording()
+        print('stop')
+        if not current_name:
+            raise RuntimeError("not recording")
+        print('before')
+        await ctx.r.delete(RECORDING_NAME)
+        print('after')
+
+    @classmethod
+    def _record(cls, name: str, key: str):
+        return asyncio.run(cls._record_async(name, key))
+
+    @classmethod
+    async def _record_async(cls, name: str, key: str):
+        name = name.encode()
+        print("started")
+        while await ctx.r.get(key) == name:
+            print(f'recording {name} :)')
+            await asyncio.sleep(1)
+        print("done")
 
 
-@ray.remote
-class Recorder:
-    def __init__(self):
-        pass
 
-    async def record(self, name, prefix='', last_entry_id="$", batch=1, block=5000):
-        self.stopped = False
+# @ray.remote
+# class RecordingWriter:
+#     def __init__(self):
+#         self.current_recording = None
+#         self.last_recording = None
 
-        session.add(RecordingModel(name=name, start_time=datetime.datetime.now()))
-        session.commit()
-        rec_entry = session.query(RecordingModel).filter(RecordingModel.name == name).order_by(RecordingModel.start_time).last()
+#     def get_current_recording_name(self):
+#         return self.current_recording
 
-        agent = Agent()
-        stream_ids = await get_stream_ids()
-        cursor = agent.init_cursor({s: last_entry_id for s in stream_ids})
-        try:
-            while not self.stopped:
-                # read data from redis
-                results, cursor = await agent.read(cursor, latest=False, count=batch or 1, block=block)
-                for sid, xs in results:
-                    for ts, data in xs:
-                        await writer[sid].write(data, ts)
-        finally:
-            rec_entry.end_time = datetime.datetime.now()
-            session.commit()
+#     async def record(self, name, prefix='', last_entry_id="$", batch=10):
+#         self.current_recording = name
+#         self.stopped = False
+#         while not self.stopped:
+#             print(f'recording {self.current_recording} :)')
+#             await asyncio.sleep(1)
+#         print("done")
 
-    def stop(self):
-        self.stopped = True
+#         # agent = Agent()
+#         # cursor = agent.init_cursor({s: last_entry_id for s in await get_stream_ids(prefix=prefix)})
+#         # try:
+#         #     while not self.stopped:
+#         #         # read data from redis
+#         #         results, cursor = await agent.read(cursor, count=batch or 1)
+#         #         for sid, xs in results:
+#         #             for ts, data in xs:
+#         #                 await writer.write(sid, data, ts)
+#         # finally:
+#         #     pass
 
-    def replay(self):
-        pass
+#     def stop(self):
+#         self.stopped = True
+#         self.last_recording = self.current_recording
+#         self.current_recording = False
+
+#     def replay(self):
+#         pass
 
 
 class Writers:
@@ -70,6 +118,7 @@ class Writers:
         self.is_entered = False
 
 
+MB = 1024*1024
 
 class RawWriter:
     raw=True

@@ -8,9 +8,11 @@ services:
      - 8000:8000
     volumes:
       - ./redis_streamer:/src/redis_streamer
+      - ./data:/src/redis_streamer/data
     environment:
       REDIS_URL: redis://redis:6379
       # DISABLE_MULTI_DEVICE_PREFIXING: "1"
+      PYTHONUNBUFFERED: "1"
     depends_on:
       - redis
     restart: unless-stopped

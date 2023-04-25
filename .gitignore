@@ -13,6 +13,7 @@ shhhh/
 # app data
 
 app_data/
+db.sqlite
 
 # C extensions
 *.so

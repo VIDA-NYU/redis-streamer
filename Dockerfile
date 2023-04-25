@@ -14,6 +14,7 @@ RUN pip install -r requirements.txt && rm -rf ~/.cache/pip /var/cache/apt/
 ENV PYTHONPATH "${PYTHONPATH}:/src"
 
 ADD ./redis_streamer /src/redis_streamer
+RUN mkdir -p ./data
 
 # ENTRYPOINT [ "uvicorn" ]
 # CMD ["redis_streamer.main:app", "--host", "0.0.0.0", "--reload"]

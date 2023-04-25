@@ -6,3 +6,6 @@ redis
 orjson
 gunicorn
 uvicorn
+strawberry_sqlalchemy_mapper
+ray
+tqdm

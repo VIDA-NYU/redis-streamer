@@ -1,46 +1,70 @@
 from __future__ import annotations
 import typing
-import base64
-
+import asyncio
+# import ray
 import strawberry
 from strawberry.scalars import JSON, Base64
-from strawberry_sqlalchemy_mapper import strawberry_dataclass_from_model
-import orjson
-from redis_streamer import utils, ctx
-from . import streams
+from strawberry_sqlalchemy_mapper import StrawberrySQLAlchemyMapper
 from redis_streamer.config import *
-from redis_streamer.models import session, RecordingModel
+from redis_streamer.models import session, RecordingModel, get_recording, create_recording, end_recording, rename_recording, delete_recording
+from .. import recorder
 
+strawberry_sqlalchemy_mapper = StrawberrySQLAlchemyMapper()
 
 # ---------------------------------------------------------------------------- #
 #                                    Queries                                   #
 # ---------------------------------------------------------------------------- #
 
 @strawberry.type
-@strawberry_dataclass_from_model(RecordingModel)
+@strawberry_sqlalchemy_mapper.type(RecordingModel)
 class Recording:
     pass
 
 @strawberry.type
-class RecordingsQuery:
+class Recordings:
+    @strawberry.field
     def recordings(self) -> typing.List[Recording]:
         return session.query(RecordingModel).all()
 
     @strawberry.field
-    def recording(self, id: strawberry.ID) -> Recording:
-        return session.query(RecordingModel).get(id)
+    def recording(self, name: strawberry.ID) -> Recording:
+        return session.query(RecordingModel).get(name)
+    
+    @strawberry.field
+    async def current_recording(self) -> str|None:
+        return await writer.current_recording()
 
+
+# writer = recorder.RecordingWriter.remote()
+writer = recorder.RecordingWriter()
 
 @strawberry.type
 class RecordingMutation:
     @strawberry.mutation
-    async def start(self, device_id: str, meta: JSON) -> JSON:
-        return
+    async def start_recording(self, name: str='') -> JSON:
+        name = create_recording(name)
+        await writer.start(name)
+        return get_recording(name).as_dict()
 
     @strawberry.mutation
-    async def stop(self, device_id: str, meta: JSON) -> JSON:
-        return
+    async def stop_recording(self) -> JSON:
+        # name = ray.get(writer.get_current_recording_name.remote())
+        name = await writer.current_recording()
+        print(name)
+        if not name:
+            raise RuntimeError("No recording running")
+        print('before stop')
+        await writer.stop()
+        print('after stop')
+        end_recording(name)
+        return get_recording(name).as_dict()
 
     @strawberry.mutation
-    async def rename(self, device_id: str) -> JSON:
-        return await disconnect_device(device_id)
+    async def rename_recording(self, name: str, new_name: str) -> JSON:
+        rename_recording(name, new_name)
+        return get_recording(new_name).as_dict()
+
+    @strawberry.mutation
+    async def delete_recording(self, name: str) -> None:
+        delete_recording(name)
+        return 
