@@ -2,6 +2,7 @@ from __future__ import annotations
 import os
 import time
 import asyncio
+from concurrent.futures import ProcessPoolExecutor
 from redis import asyncio as aioredis
 
 from redis_streamer import utils
@@ -14,6 +15,8 @@ class Context:
         print("Connecting to", url, '...')
         self.r = await aioredis.from_url(url=url, max_connections=max_connections)
         print("Connected?", await self.r.ping())
+        self.pool = ProcessPoolExecutor()
+
 ctx = Context()
 
 META_PREFIX = 'XMETA'

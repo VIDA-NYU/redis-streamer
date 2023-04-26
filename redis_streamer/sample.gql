@@ -1,0 +1,28 @@
+query ls {
+  recordings {
+    name
+    startTime
+    endTime
+  }
+  currentRecording
+}
+
+mutation start {
+  startRecording
+}
+
+mutation stop {
+  stopRecording
+}
+
+mutation rename {
+  renameRecording(name: "aaaa")
+}
+
+mutation delete {
+  deleteRecording(name: "aaaa")
+}
+
+mutation delete_all {
+  deleteAllRecordings
+}

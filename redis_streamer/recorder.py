@@ -3,7 +3,6 @@ import tqdm
 import asyncio
 # import ray
 from multiprocessing import Event
-from concurrent.futures import ProcessPoolExecutor
 import datetime
 from .core import ctx, Agent
 from .models import session, RecordingModel, create_recording, end_recording
@@ -16,21 +15,24 @@ RECORDING_NAME = f'{PREFIX}:name'
 
 class RecordingWriter:
     def __init__(self) -> None:
-        self.pool = ProcessPoolExecutor()
+        pass #self.pool = ProcessPoolExecutor()
 
-    async def current_recording(self):
-        return (await ctx.r.get(RECORDING_NAME) or b'').decode('utf-8') or None
+    @classmethod
+    async def current_recording(cls, key=RECORDING_NAME):
+        return (await ctx.r.get(key) or b'').decode('utf-8') or None
 
-    async def start(self, name):
-        current_name = await self.current_recording()
+    @classmethod
+    async def start(cls, name):
+        current_name = await cls.current_recording()
         if current_name:
             raise RuntimeError(f"already recording {current_name}")
         await ctx.r.set(RECORDING_NAME, name)
-        self.pool.submit(self._record, name, RECORDING_NAME)
+        ctx.pool.submit(cls._record, name, RECORDING_NAME)
         print("submitteds")
 
-    async def stop(self):
-        current_name = await self.current_recording()
+    @classmethod
+    async def stop(cls):
+        current_name = await cls.current_recording()
         print('stop')
         if not current_name:
             raise RuntimeError("not recording")
