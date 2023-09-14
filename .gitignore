@@ -10,6 +10,9 @@ shh/
 shhh/
 shhhh/
 
+*.mcap
+*.mp4
+
 # app data
 
 app_data/

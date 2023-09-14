@@ -1,8 +1,8 @@
 import strawberry
-from ..core import ctx
+from redis_streamer.core import ctx
+from redis_streamer.config import ENABLE_MULTI_DEVICE_PREFIXING
 from . import devices
 from . import streams
-from ..config import ENABLE_MULTI_DEVICE_PREFIXING
 
 if ENABLE_MULTI_DEVICE_PREFIXING:
     _Query = type('_Query', (devices.Devices, streams.Streams), {})

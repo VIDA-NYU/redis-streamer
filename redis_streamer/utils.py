@@ -38,6 +38,8 @@ def format_iso(tid: str|bytes, format: str=''):
         return parse_datetime(tid).strftime(format)
     return parse_datetime(tid).isoformat()
 
+def nonspecific_timestamp(tid: str|bytes):
+    return f"{maybe_decode(tid).split('-')[0]}-*"
 
 # ---------------------------------------------------------------------------- #
 #                                Data formatting                               #

@@ -1,24 +1,5 @@
 '''
 
-Specification:
-
-
-
-XREAD {
-    cmd = XREAD,
-    streams: {
-        id: previous timestamp,
-    },
-    count: int,
-    block: bool,
-}
-
-
-XADD: {
-    cmd: XADD,
-    keys: [*keys],
-}
-
 '''
 from __future__ import annotations
 import time
@@ -27,8 +8,8 @@ import orjson
 from fastapi import APIRouter, Path, Query, WebSocket, WebSocketDisconnect
 from websockets.exceptions import ConnectionClosed
 
-from .. import utils
-from ..core import ctx, Agent
+from redis_streamer import utils
+from redis_streamer.core import ctx, Agent
 from redis_streamer.config import DEFAULT_DEVICE, ENABLE_MULTI_DEVICE_PREFIXING
 
 app = APIRouter()
@@ -65,7 +46,7 @@ async def pull_stream_data_ws(
         - client receives data bytes. This will contain a single message.
     '''
     await ws.accept()
-    agent = Agent(ws)
+    agent = Agent()
 
     # prepare device prefix
     if ENABLE_MULTI_DEVICE_PREFIXING:
@@ -129,7 +110,7 @@ async def push_stream_data_ws(
     
     '''
     await ws.accept()
-    agent = Agent(ws)
+    agent = Agent()
     if ENABLE_MULTI_DEVICE_PREFIXING:
         prefix = f'{device_id or DEFAULT_DEVICE}:{prefix}'
     

@@ -18,4 +18,4 @@ ADD ./redis_streamer /src/redis_streamer
 # ENTRYPOINT [ "uvicorn" ]
 # CMD ["redis_streamer.main:app", "--host", "0.0.0.0", "--reload"]
 ENTRYPOINT [ "python" ]
-CMD [ "-m", "gunicorn", "redis_streamer.main:app", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8000" ]
+CMD [ "-m", "gunicorn", "redis_streamer.api.main:app", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8000" ]

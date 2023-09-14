@@ -26,9 +26,10 @@ services:
     environment:
       ALLOW_EMPTY_PASSWORD: 'yes'
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
-      interval: 1s
-      timeout: 3s
+      test: ["CMD-SHELL", "redis-cli ping healthcheck | grep healthcheck"]
+      start_period: 10s
+      interval: 10s
+      timeout: 5s
       retries: 5
 
   # a dashboard to view redis
@@ -40,3 +41,15 @@ services:
       - redis
     ports:
       - '8035:8001'
+
+  redisstreamer-record:
+    build: .
+    container_name: redisstreamer-record
+    command: -m redis_streamer.agents.record 
+    volumes:
+      - ./redis_streamer:/src/redis_streamer
+    environment:
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - redis
+    restart: unless-stopped

@@ -1,6 +1,7 @@
 import io
 import time
 import tqdm
+import shlex
 import json
 import asyncio
 import functools
@@ -47,6 +48,7 @@ class API:
         params_str = f'?{params_str}' if params_str else ''
 
         url = f"{self._wsurl if isws else self._url}/{url.rstrip('/')}{params_str}"
+        print(url)
         return url
 
     def graphql(self, query, vars=None):
@@ -55,7 +57,7 @@ class API:
     def ls(self, *fields):
         return self.graphql('''query GetStreams {
             streams {
-                sid
+                id
                 firstEntryId
                 lastEntryId
                 firstEntryTime
@@ -63,7 +65,25 @@ class API:
                 ''' + '\n'.join(fields) + '''
             }
         }''', {'fields': fields})
+    
+    def record(self, name):
+        return self.cmd('set', 'RECORD:NAME', name)
+    
+    def stop_record(self):
+        return self.cmd('del', 'RECORD:NAME')
 
+    def xrecord(self, name):
+        return self.cmd('XADD', 'XRECORD:NAME', "MAXLEN", "~", 100, '*', 'd', '"asdf"')
+
+    def stop_xrecord(self):
+        return self.cmd('XADD', 'XRECORD:NAME', "MAXLEN", "~", 100, '*', 'd', '')
+
+    def cmd(self, *cmd):
+        print(cmd)#/{shlex.join(map(str, cmd))}
+        return self.sess.put(self.asurl('cmd'), json={'cmd': cmd}).text
+    
+    def last(self, key):
+        return self.cmd('xrevrange', key, '+', '-', 'COUNT', '1')
 
     # ---------------------------------------------------------------------------- #
     #                                Basic Streaming                               #
@@ -94,12 +114,19 @@ class API:
 
         async with self.push_connect_async(sid, **kw) as ws:
             while True:
-                im = np.random.randint(0, 255, size=shape).astype('uint8')
+                # im = np.random.randint(0, 255, size=shape).astype('uint8')
+                im = np.zeros(shape, dtype=np.uint8)
                 im = format_image(im)
                 await ws.send_data(im)
+                # print(im)
+                # print(len(im))
+                # print(im[:30], im[-30:])
+                # print(len(im))
+                # input()
                 if fps:
-                    await asyncio.sleep(max(0, 1/fps-(time.time() - t0)))
-                    t0 = time.time()
+                    t1 = time.time()
+                    await asyncio.sleep(max(0, 1/fps-(t1 - t0)))
+                    t0 = t1
 
     @async2sync
     async def pull_image(self, sid, **kw):
@@ -111,6 +138,29 @@ class API:
                     im = load_image(data)
                     cv2.imshow(sid, im)
                     cv2.waitKey(1)
+
+    @async2sync
+    async def pull_video(self, sid, fps=30, **kw):
+        import supervision as sv
+        s = None
+        try:
+            async with self.pull_connect_async(sid, **kw) as ws:
+                while True:
+                    header, entries = await ws.recv_data()
+                    entries = unpack_entries(header, entries)
+                    for sid, t, data in entries:
+                        # data = data.decode('unicode_escape').encode()
+                        # data = data.replace(b'\\\\', b'\\')
+                        print(sid, t, len(data))
+                        im = load_image(data)
+                        if s is None:
+                            s = sv.VideoSink(f'{sid}.mp4', video_info=sv.VideoInfo(width=im.shape[1], height=im.shape[0], fps=fps))
+                            s.__enter__()
+                        s.write_frame(im)
+        finally:
+            if s is not None:
+                s.__exit__(None,None,None)
+
 
     def push_image_rest(self, sid, shape=(100, 100, 3), fps=100, **kw):
         url = self.asurl(f'data/{sid}', **kw)
@@ -237,7 +287,9 @@ class WebsocketStream:
             self._pbar.update()
 
 
-
-if __name__ == '__main__':
+def main():
     import fire
     fire.Fire(API)
+
+if __name__ == '__main__':
+    main()

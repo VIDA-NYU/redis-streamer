@@ -1,12 +1,12 @@
-import _patch
+import redis_streamer.api._patch as _patch
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from strawberry.fastapi import GraphQLRouter
 
 from redis_streamer import ctx
-from redis_streamer import graphql_schema
-from redis_streamer.routes import data_requests, data_ws #, streaming, prompt_ws
+from . import graphql_schema
+from .routes import data_requests, data_ws, cmd as cmd_routes #, streaming, prompt_ws
 
 
 
@@ -24,6 +24,7 @@ graphql_app = GraphQLRouter(graphql_schema.schema)
 app.include_router(graphql_app, prefix="/graphql")
 app.include_router(data_requests.app, prefix="/data")
 app.include_router(data_ws.app, prefix="/data")
+app.include_router(cmd_routes.app, prefix="/redis")
 # app.include_router(prompt_ws.app, prefix="/data")
 # app.include_router(streaming.app, prefix="/streaming")
 

@@ -67,10 +67,11 @@ async def prompt_pull_data_ws(ws: WebSocket):
         time (str): The redis timestamp of the sample.
     '''
     await ws.accept()
-    agent = Agent(ws)
+    agent = Agent()
+    runner = Runner(agent, ws)
     try:
         async for query in recv_queries(ws):
-            xs = await agent.run_commands([query], 'XREAD')
+            xs = await runner.run_commands([query], 'XREAD')
             for sid, t, data, metadata in xs:
                 await ws.send_json({
                     'stream_id': sid,
@@ -98,10 +99,11 @@ async def prompt_push_data_ws(
         metadata (dict): Any metadata you would like to store alongside the entry.
     '''
     await ws.accept()
-    agent = Agent(ws)
+    agent = Agent()
+    runner = Runner(agent, ws)
     try:
         async for query in recv_queries(ws):
-            results = await agent.run_commands([query], 'XADD')
+            results = await runner.run_commands([query], 'XADD')
             if ack:
                 await ws.send_json(results)
     except (WebSocketDisconnect, ConnectionClosed):
@@ -129,3 +131,47 @@ async def recv_queries(ws):
         else:
             raise ValueError("No query")
         yield query
+
+
+class Runner:
+    def __init__(self, agent, ws):
+        self.agent = agent
+        self.ws = ws
+
+    async def run_commands(self, query, cmd=None):
+        squeeze = isinstance(query, dict)
+        async with ctx.r.pipeline() as p:
+            for q in [query] if squeeze else query:
+                if cmd:
+                    q['cmd'] = cmd
+                ack = q.pop('ack', False)
+                await self.run_command(p, **query)
+                if ack:
+                    await self.ws.send_text('')
+            xs = await p.execute()
+        return xs[0] if squeeze else xs
+    
+    async def run_command(self, p, cmd, **query):
+        return getattr(self, f'cmd__{cmd}')(p, **query)
+
+    # ---------------------------------------------------------------------------- #
+    #                                Redis Commands                                #
+    # ---------------------------------------------------------------------------- #
+
+    # ------- These are asynchronous so we can await them without checking ------- #
+
+    async def cmd__xread(self, p, sids, **kw):
+        return self.agent.xread(p, sids, **kw)
+
+    async def cmd__xrevrange(self, p, sid, **kw):
+        return self.agent.xrevrange(p, sid, **kw)
+
+    async def cmd__xrange(self, p, sid, **kw):
+        return self.agent.xrange(p, sid, **kw)
+
+    async def cmd__xlen(self, p, sid):
+        return self.agent.xlen(p, sid)
+
+    async def cmd__xadd(self, p, sid, **kw):
+        data = await self.ws.recv_bytes()
+        return self.agent.xadd(p, sid, data, **kw)

@@ -9,7 +9,7 @@ from redis_streamer import utils
 class Context:
     stream_maxlen = int(os.getenv('REDIS_STREAM_MAXLEN') or 1000)
     async def init(self):
-        url = os.getenv('REDIS_URL') or 'redis://127.0.0.1:6789'
+        url = os.getenv('REDIS_URL') or 'redis://127.0.0.1:6379'
         max_connections = int(os.getenv('REDIS_MAX_CONNECTIONS') or 9000)
         print("Connecting to", url, '...')
         self.r = await aioredis.from_url(url=url, max_connections=max_connections)
@@ -22,58 +22,11 @@ META_PREFIX = 'XMETA'
 
 class Agent:
     '''Redis streaming agent'''
-    def __init__(self, ws=None) -> None:
+    def __init__(self, ws=None):
         self._ws = ws
 
-    @property
-    def ws(self):
-        if self._ws is None:
-            raise RuntimeError("No websocket available.")
-        return self._ws
-
-    # ---------------------------------------------------------------------------- #
-    #                               Running commands                               #
-    # ---------------------------------------------------------------------------- #
-
-    async def run_commands(self, query, cmd=None):
-        squeeze = isinstance(query, dict)
-        async with ctx.r.pipeline() as p:
-            for q in [query] if squeeze else query:
-                if cmd:
-                    q['cmd'] = cmd
-                ack = q.pop('ack', False)
-                await self.run_command(p, **query)
-                if ack:
-                    await self.ws.send_text('')
-            xs = await p.execute()
-        return xs[0] if squeeze else xs
-
-    async def run_command(self, p, cmd, **query):
-        return getattr(self, f'cmd__{cmd}')(p, **query)
-
-    # ---------------------------------------------------------------------------- #
-    #                                Redis Commands                                #
-    # ---------------------------------------------------------------------------- #
-
-    # ------- These are asynchronous so we can await them without checking ------- #
-
-    async def cmd__xread(self, p, sids, **kw):
-        return self.xread(p, sids, **kw)
-
-    async def cmd__xrevrange(self, p, sid, **kw):
-        return self.xrevrange(p, sid, **kw)
-
-    async def cmd__xrange(self, p, sid, **kw):
-        return self.xrange(p, sid, **kw)
-
-    async def cmd__xlen(self, p, sid):
-        return self.xlen(p, sid)
-
-    async def cmd__xadd(self, p, sid, **kw):
-        data = await self.ws.recv_bytes()
-        return self.xadd(p, sid, data, **kw)
-
     # ----- These are synchronous because they can be used with a transaction ---- #
+    # ------------- But the return value can be awaited if p is ctx.r ------------ #
 
     def xread(self, p, sids, count=1, block=None):
         return p.xread(sids, count=count, block=block)
@@ -117,16 +70,17 @@ class Agent:
     #                              Reading Streamers                               #
     # ---------------------------------------------------------------------------- #
 
-    def init_cursor(self, sids: list[str]|dict[str, str], prefix='') -> dict[str, str]:
+    def init_cursor(self, sids: list[str]|dict[str, str], prefix='', explicit_time=True) -> dict[str, str]:
         # allow list - default to after now
         if isinstance(sids, list):
             sids = {s: '$' for s in sids}
         if prefix:
             sids = {f'{prefix}{s}': t for s, t in sids.items()}
         # replace dollar with explicit time
-        for k, l in sids.items():
-            if l == '$':
-                sids[k] = utils.format_epoch_time(time.time())
+        if explicit_time:
+            for k, l in sids.items():
+                if l == '$':
+                    sids[k] = utils.format_epoch_time(time.time())
         return sids
 
     # def encode_cursor(self, sids):
