@@ -66,21 +66,21 @@ class API:
             }
         }''', {'fields': fields})
     
-    def record(self, name):
-        return self.cmd('set', 'RECORD:NAME', name)
+    # def record(self, name):
+    #     return self.cmd('set', 'RECORD:NAME', name)
     
-    def stop_record(self):
-        return self.cmd('del', 'RECORD:NAME')
+    # def stop_record(self):
+    #     return self.cmd('del', 'RECORD:NAME')
 
-    def xrecord(self, name):
-        return self.cmd('XADD', 'XRECORD:NAME', "MAXLEN", "~", 100, '*', 'd', '"asdf"')
+    # def xrecord(self, name):
+    #     return self.cmd('XADD', 'XRECORD:NAME', "MAXLEN", "~", 100, '*', 'd', name)
 
-    def stop_xrecord(self):
-        return self.cmd('XADD', 'XRECORD:NAME', "MAXLEN", "~", 100, '*', 'd', '')
+    # def stop_xrecord(self):
+    #     return self.cmd('XADD', 'XRECORD:NAME', "MAXLEN", "~", 100, '*', 'd', '')
 
     def cmd(self, *cmd):
         print(cmd)#/{shlex.join(map(str, cmd))}
-        return self.sess.put(self.asurl('cmd'), json={'cmd': cmd}).text
+        return self.sess.put(self.asurl('redis'), json={'cmd': cmd}).text
     
     def last(self, key):
         return self.cmd('xrevrange', key, '+', '-', 'COUNT', '1')
@@ -109,24 +109,25 @@ class API:
     # ---------------------------------------------------------------------------- #
 
     @async2sync
-    async def push_image(self, sid, shape=(100, 100, 3), fps=100, **kw):
+    async def push_image(self, sid, size=700, shape=None, fps=None, **kw):
+        # import pyinstrument
+        # p=pyinstrument.Profiler()
+        # try:
+        #     with p:
         t0 = time.time()
-
+        shape = shape or (size, size, 3)
+        print(f"Pushing image with shape: {shape}")
+        im = np.random.randint(0, 255, size=shape).astype('uint8')
+        im = format_image(im)
         async with self.push_connect_async(sid, **kw) as ws:
             while True:
-                # im = np.random.randint(0, 255, size=shape).astype('uint8')
-                im = np.zeros(shape, dtype=np.uint8)
-                im = format_image(im)
                 await ws.send_data(im)
-                # print(im)
-                # print(len(im))
-                # print(im[:30], im[-30:])
-                # print(len(im))
-                # input()
                 if fps:
                     t1 = time.time()
                     await asyncio.sleep(max(0, 1/fps-(t1 - t0)))
                     t0 = t1
+        # finally:
+        #     p.print()
 
     @async2sync
     async def pull_image(self, sid, **kw):
@@ -149,9 +150,6 @@ class API:
                     header, entries = await ws.recv_data()
                     entries = unpack_entries(header, entries)
                     for sid, t, data in entries:
-                        # data = data.decode('unicode_escape').encode()
-                        # data = data.replace(b'\\\\', b'\\')
-                        print(sid, t, len(data))
                         im = load_image(data)
                         if s is None:
                             s = sv.VideoSink(f'{sid}.mp4', video_info=sv.VideoInfo(width=im.shape[1], height=im.shape[0], fps=fps))
